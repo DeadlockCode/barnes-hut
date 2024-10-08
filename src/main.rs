@@ -11,6 +11,12 @@ use renderer::Renderer;
 use simulation::Simulation;
 
 fn main() {
+    let threads = std::thread::available_parallelism().unwrap().get().max(3) - 2;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global()
+        .unwrap();
+
     let config = quarkstrom::Config {
         window_mode: quarkstrom::WindowMode::Windowed(900, 900),
     };

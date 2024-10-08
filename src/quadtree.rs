@@ -1,7 +1,12 @@
-use std::ops::Range;
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::{body::Body, partition::Partition};
 use ultraviolet::Vec2;
+
+use rayon::prelude::*;
 
 #[derive(Clone, Copy)]
 pub struct Quad {
@@ -52,6 +57,18 @@ pub struct Node {
 }
 
 impl Node {
+    pub const ZEROED: Self = Self {
+        children: 0,
+        next: 0,
+        pos: Vec2 { x: 0.0, y: 0.0 },
+        mass: 0.0,
+        quad: Quad {
+            center: Vec2 { x: 0.0, y: 0.0 },
+            size: 0.0,
+        },
+        bodies: 0..0,
+    };
+
     pub fn new(next: usize, quad: Quad, bodies: Range<usize>) -> Self {
         Self {
             children: 0,
@@ -80,6 +97,8 @@ pub struct Quadtree {
     pub t_sq: f32,
     pub e_sq: f32,
     pub leaf_capacity: usize,
+    pub thread_capacity: usize,
+    pub atomic_len: AtomicUsize,
     pub nodes: Vec<Node>,
     pub parents: Vec<usize>,
 }
@@ -87,22 +106,23 @@ pub struct Quadtree {
 impl Quadtree {
     pub const ROOT: usize = 0;
 
-    pub fn new(theta: f32, epsilon: f32, leaf_capacity: usize) -> Self {
+    pub fn new(theta: f32, epsilon: f32, leaf_capacity: usize, thread_capacity: usize) -> Self {
         Self {
             t_sq: theta * theta,
             e_sq: epsilon * epsilon,
             leaf_capacity,
+            thread_capacity,
+            atomic_len: 0.into(),
             nodes: Vec::new(),
             parents: Vec::new(),
         }
     }
 
     pub fn clear(&mut self) {
-        self.nodes.clear();
-        self.parents.clear();
+        self.atomic_len.store(0, Ordering::Relaxed);
     }
 
-    pub fn subdivide(&mut self, node: usize, bodies: &mut [Body], range: Range<usize>) {
+    pub fn subdivide(&mut self, node: usize, bodies: &mut [Body], range: Range<usize>) -> usize {
         let center = self.nodes[node].quad.center;
 
         let mut split = [range.start, 0, 0, 0, range.end];
@@ -114,8 +134,9 @@ impl Quadtree {
         split[1] = split[0] + bodies[split[0]..split[2]].partition(predicate);
         split[3] = split[2] + bodies[split[2]..split[4]].partition(predicate);
 
-        self.parents.push(node);
-        let children = self.nodes.len();
+        let len = self.atomic_len.fetch_add(1, Ordering::Relaxed);
+        let children = len * 4 + 1;
+        self.parents[len] = node;
         self.nodes[node].children = children;
 
         let nexts = [
@@ -127,12 +148,15 @@ impl Quadtree {
         let quads = self.nodes[node].quad.subdivide();
         for i in 0..4 {
             let bodies = split[i]..split[i + 1];
-            self.nodes.push(Node::new(nexts[i], quads[i], bodies));
+            self.nodes[children + i] = Node::new(nexts[i], quads[i], bodies);
         }
+
+        children
     }
 
     pub fn propagate(&mut self) {
-        for &node in self.parents.iter().rev() {
+        let len = self.atomic_len.load(Ordering::Relaxed);
+        for &node in self.parents[..len].iter().rev() {
             let i = self.nodes[node].children;
 
             self.nodes[node].pos = self.nodes[i].pos
@@ -145,35 +169,77 @@ impl Quadtree {
                 + self.nodes[i + 2].mass
                 + self.nodes[i + 3].mass;
         }
-        for node in &mut self.nodes {
+        self.nodes[0..len * 4 + 1].par_iter_mut().for_each(|node| {
             node.pos /= node.mass.max(f32::MIN_POSITIVE);
-        }
+        });
     }
 
     pub fn build(&mut self, bodies: &mut [Body]) {
         self.clear();
 
-        let quad = Quad::new_containing(bodies);
-        self.nodes.push(Node::new(0, quad, 0..bodies.len()));
+        let new_len = 4 * bodies.len() + 1024;
+        self.nodes.resize(new_len, Node::ZEROED);
+        self.parents.resize(new_len / 4, 0);
 
-        let mut node = 0;
-        while node < self.nodes.len() {
-            let range = self.nodes[node].bodies.clone();
-            if range.len() > self.leaf_capacity {
-                self.subdivide(node, bodies, range);
-            } else {
-                for i in range {
-                    self.nodes[node].pos += bodies[i].pos * bodies[i].mass;
-                    self.nodes[node].mass += bodies[i].mass;
+        let quad = Quad::new_containing(bodies);
+        self.nodes[Self::ROOT] = Node::new(0, quad, 0..bodies.len());
+
+        let (tx, rx) = crossbeam::channel::unbounded();
+        tx.send(Self::ROOT).unwrap();
+
+        let quadtree_ptr = self as *mut Quadtree as usize;
+        let bodies_ptr = bodies.as_ptr() as usize;
+        let bodies_len = bodies.len();
+
+        let counter = AtomicUsize::new(0);
+        rayon::broadcast(|_| {
+            let mut stack = Vec::new();
+            let quadtree = unsafe { &mut *(quadtree_ptr as *mut Quadtree) };
+            let bodies =
+                unsafe { std::slice::from_raw_parts_mut(bodies_ptr as *mut Body, bodies_len) };
+
+            while counter.load(Ordering::Relaxed) != bodies.len() {
+                while let Ok(node) = rx.try_recv() {
+                    let range = quadtree.nodes[node].bodies.clone();
+                    let len = quadtree.nodes[node].bodies.len();
+
+                    if range.len() >= quadtree.thread_capacity {
+                        let children = quadtree.subdivide(node, bodies, range);
+                        for i in 0..4 {
+                            if !self.nodes[children + i].bodies.is_empty() {
+                                tx.send(children + i).unwrap();
+                            }
+                        }
+                        continue;
+                    }
+
+                    counter.fetch_add(len, Ordering::Relaxed);
+
+                    stack.push(node);
+                    while let Some(node) = stack.pop() {
+                        let range = quadtree.nodes[node].bodies.clone();
+                        if range.len() <= quadtree.leaf_capacity {
+                            quadtree.nodes[node].pos =
+                                bodies[range.clone()].iter().map(|b| b.pos * b.mass).sum();
+                            quadtree.nodes[node].mass =
+                                bodies[range.clone()].iter().map(|b| b.mass).sum();
+                            continue;
+                        }
+                        let children = quadtree.subdivide(node, bodies, range);
+                        for i in 0..4 {
+                            if !self.nodes[children + i].bodies.is_empty() {
+                                stack.push(children + i);
+                            }
+                        }
+                    }
                 }
             }
-            node += 1;
-        }
+        });
 
         self.propagate();
     }
 
-    pub fn acc(&self, pos: Vec2, bodies: &[Body]) -> Vec2 {
+    pub fn acc_pos(&self, pos: Vec2, bodies: &[Body]) -> Vec2 {
         let mut acc = Vec2::zero();
 
         let mut node = Self::ROOT;
@@ -211,5 +277,14 @@ impl Quadtree {
         }
 
         acc
+    }
+
+    pub fn acc(&self, bodies: &mut Vec<Body>) {
+        let bodies_ptr = std::ptr::addr_of_mut!(*bodies) as usize;
+
+        bodies.par_iter_mut().for_each(|body| {
+            let bodies = unsafe { &*(bodies_ptr as *const Vec<Body>) };
+            body.acc = self.acc_pos(body.pos, bodies);
+        });
     }
 }

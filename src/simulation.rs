@@ -1,6 +1,7 @@
 use crate::{body::Body, quadtree::Quadtree, utils};
 
 use broccoli::aabb::Rect;
+use broccoli_rayon::{build::RayonBuildPar, prelude::RayonQueryPar};
 use ultraviolet::Vec2;
 
 pub struct Simulation {
@@ -17,9 +18,10 @@ impl Simulation {
         let theta = 1.0;
         let epsilon = 1.0;
         let leaf_capacity = 16;
+        let thread_capacity = 1024;
 
         let bodies: Vec<Body> = utils::uniform_disc(n);
-        let quadtree = Quadtree::new(theta, epsilon, leaf_capacity);
+        let quadtree = Quadtree::new(theta, epsilon, leaf_capacity, thread_capacity);
 
         Self {
             dt,
@@ -38,10 +40,7 @@ impl Simulation {
 
     pub fn attract(&mut self) {
         self.quadtree.build(&mut self.bodies);
-
-        for body in 0..self.bodies.len() {
-            self.bodies[body].acc = self.quadtree.acc(self.bodies[body].pos, &self.bodies);
-        }
+        self.quadtree.acc(&mut self.bodies);
     }
 
     pub fn iterate(&mut self) {
@@ -64,13 +63,17 @@ impl Simulation {
             })
             .collect::<Vec<_>>();
 
-        let mut broccoli = broccoli::Tree::new(&mut rects);
+        let mut broccoli = broccoli::Tree::par_new(&mut rects);
 
-        broccoli.find_colliding_pairs(|i, j| {
+        let ptr = self as *mut Self as usize;
+        
+        broccoli.par_find_colliding_pairs(|i, j| {
+            let sim = unsafe { &mut *(ptr as *mut Self) };
+
             let i = *i.unpack_inner();
             let j = *j.unpack_inner();
 
-            self.resolve(i, j);
+            sim.resolve(i, j);
         });
     }
 
