@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 mod body;
+mod partition;
 mod quadtree;
 mod renderer;
 mod simulation;

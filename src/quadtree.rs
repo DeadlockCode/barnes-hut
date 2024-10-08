@@ -1,4 +1,6 @@
-use crate::body::Body;
+use std::ops::Range;
+
+use crate::{body::Body, partition::Partition};
 use ultraviolet::Vec2;
 
 #[derive(Clone, Copy)]
@@ -27,10 +29,6 @@ impl Quad {
         Self { center, size }
     }
 
-    pub fn find_quadrant(&self, pos: Vec2) -> usize {
-        ((pos.y > self.center.y) as usize) << 1 | (pos.x > self.center.x) as usize
-    }
-
     pub fn into_quadrant(mut self, quadrant: usize) -> Self {
         self.size *= 0.5;
         self.center.x += ((quadrant & 1) as f32 - 0.5) * self.size;
@@ -50,16 +48,18 @@ pub struct Node {
     pub pos: Vec2,
     pub mass: f32,
     pub quad: Quad,
+    pub bodies: Range<usize>,
 }
 
 impl Node {
-    pub fn new(next: usize, quad: Quad) -> Self {
+    pub fn new(next: usize, quad: Quad, bodies: Range<usize>) -> Self {
         Self {
             children: 0,
             next,
             pos: Vec2::zero(),
             mass: 0.0,
             quad,
+            bodies,
         }
     }
 
@@ -79,6 +79,7 @@ impl Node {
 pub struct Quadtree {
     pub t_sq: f32,
     pub e_sq: f32,
+    pub leaf_capacity: usize,
     pub nodes: Vec<Node>,
     pub parents: Vec<usize>,
 }
@@ -86,22 +87,33 @@ pub struct Quadtree {
 impl Quadtree {
     pub const ROOT: usize = 0;
 
-    pub fn new(theta: f32, epsilon: f32) -> Self {
+    pub fn new(theta: f32, epsilon: f32, leaf_capacity: usize) -> Self {
         Self {
             t_sq: theta * theta,
             e_sq: epsilon * epsilon,
+            leaf_capacity,
             nodes: Vec::new(),
             parents: Vec::new(),
         }
     }
 
-    pub fn clear(&mut self, quad: Quad) {
+    pub fn clear(&mut self) {
         self.nodes.clear();
         self.parents.clear();
-        self.nodes.push(Node::new(0, quad));
     }
 
-    fn subdivide(&mut self, node: usize) -> usize {
+    pub fn subdivide(&mut self, node: usize, bodies: &mut [Body], range: Range<usize>) {
+        let center = self.nodes[node].quad.center;
+
+        let mut split = [range.start, 0, 0, 0, range.end];
+
+        let predicate = |body: &Body| body.pos.y < center.y;
+        split[2] = split[0] + bodies[split[0]..split[4]].partition(predicate);
+
+        let predicate = |body: &Body| body.pos.x < center.x;
+        split[1] = split[0] + bodies[split[0]..split[2]].partition(predicate);
+        split[3] = split[2] + bodies[split[2]..split[4]].partition(predicate);
+
         self.parents.push(node);
         let children = self.nodes.len();
         self.nodes[node].children = children;
@@ -114,50 +126,8 @@ impl Quadtree {
         ];
         let quads = self.nodes[node].quad.subdivide();
         for i in 0..4 {
-            self.nodes.push(Node::new(nexts[i], quads[i]));
-        }
-
-        return children;
-    }
-
-    pub fn insert(&mut self, pos: Vec2, mass: f32) {
-        let mut node = Self::ROOT;
-
-        while self.nodes[node].is_branch() {
-            let quadrant = self.nodes[node].quad.find_quadrant(pos);
-            node = self.nodes[node].children + quadrant;
-        }
-
-        if self.nodes[node].is_empty() {
-            self.nodes[node].pos = pos;
-            self.nodes[node].mass = mass;
-            return;
-        }
-
-        let (p, m) = (self.nodes[node].pos, self.nodes[node].mass);
-        if pos == p {
-            self.nodes[node].mass += mass;
-            return;
-        }
-
-        loop {
-            let children = self.subdivide(node);
-
-            let q1 = self.nodes[node].quad.find_quadrant(p);
-            let q2 = self.nodes[node].quad.find_quadrant(pos);
-
-            if q1 == q2 {
-                node = children + q1;
-            } else {
-                let n1 = children + q1;
-                let n2 = children + q2;
-
-                self.nodes[n1].pos = p;
-                self.nodes[n1].mass = m;
-                self.nodes[n2].pos = pos;
-                self.nodes[n2].mass = mass;
-                return;
-            }
+            let bodies = split[i]..split[i + 1];
+            self.nodes.push(Node::new(nexts[i], quads[i], bodies));
         }
     }
 
@@ -165,34 +135,71 @@ impl Quadtree {
         for &node in self.parents.iter().rev() {
             let i = self.nodes[node].children;
 
-            self.nodes[node].pos = self.nodes[i].pos * self.nodes[i].mass
-                + self.nodes[i + 1].pos * self.nodes[i + 1].mass
-                + self.nodes[i + 2].pos * self.nodes[i + 2].mass
-                + self.nodes[i + 3].pos * self.nodes[i + 3].mass;
+            self.nodes[node].pos = self.nodes[i].pos
+                + self.nodes[i + 1].pos
+                + self.nodes[i + 2].pos
+                + self.nodes[i + 3].pos;
 
             self.nodes[node].mass = self.nodes[i].mass
                 + self.nodes[i + 1].mass
                 + self.nodes[i + 2].mass
                 + self.nodes[i + 3].mass;
-
-            let mass = self.nodes[node].mass;
-            self.nodes[node].pos /= mass;
+        }
+        for node in &mut self.nodes {
+            node.pos /= node.mass.max(f32::MIN_POSITIVE);
         }
     }
 
-    pub fn acc(&self, pos: Vec2) -> Vec2 {
+    pub fn build(&mut self, bodies: &mut [Body]) {
+        self.clear();
+
+        let quad = Quad::new_containing(bodies);
+        self.nodes.push(Node::new(0, quad, 0..bodies.len()));
+
+        let mut node = 0;
+        while node < self.nodes.len() {
+            let range = self.nodes[node].bodies.clone();
+            if range.len() > self.leaf_capacity {
+                self.subdivide(node, bodies, range);
+            } else {
+                for i in range {
+                    self.nodes[node].pos += bodies[i].pos * bodies[i].mass;
+                    self.nodes[node].mass += bodies[i].mass;
+                }
+            }
+            node += 1;
+        }
+
+        self.propagate();
+    }
+
+    pub fn acc(&self, pos: Vec2, bodies: &[Body]) -> Vec2 {
         let mut acc = Vec2::zero();
 
         let mut node = Self::ROOT;
         loop {
-            let n = &self.nodes[node];
+            let n = self.nodes[node].clone();
 
             let d = n.pos - pos;
             let d_sq = d.mag_sq();
 
-            if n.is_leaf() || n.quad.size * n.quad.size < d_sq * self.t_sq {
+            if n.quad.size * n.quad.size < d_sq * self.t_sq {
                 let denom = (d_sq + self.e_sq) * d_sq.sqrt();
-                acc += d * (n.mass / denom).min(f32::MAX);
+                acc += d * (n.mass / denom);
+
+                if n.next == 0 {
+                    break;
+                }
+                node = n.next;
+            } else if n.is_leaf() {
+                for i in n.bodies {
+                    let body = &bodies[i];
+                    let d = body.pos - pos;
+                    let d_sq = d.mag_sq();
+
+                    let denom = (d_sq + self.e_sq) * d_sq.sqrt();
+                    acc += d * (body.mass / denom).min(f32::MAX);
+                }
 
                 if n.next == 0 {
                     break;

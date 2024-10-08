@@ -1,8 +1,4 @@
-use crate::{
-    body::Body,
-    quadtree::{Quad, Quadtree},
-    utils,
-};
+use crate::{body::Body, quadtree::Quadtree, utils};
 
 use broccoli::aabb::Rect;
 use ultraviolet::Vec2;
@@ -20,9 +16,10 @@ impl Simulation {
         let n = 100000;
         let theta = 1.0;
         let epsilon = 1.0;
+        let leaf_capacity = 16;
 
         let bodies: Vec<Body> = utils::uniform_disc(n);
-        let quadtree = Quadtree::new(theta, epsilon);
+        let quadtree = Quadtree::new(theta, epsilon, leaf_capacity);
 
         Self {
             dt,
@@ -40,17 +37,10 @@ impl Simulation {
     }
 
     pub fn attract(&mut self) {
-        let quad = Quad::new_containing(&self.bodies);
-        self.quadtree.clear(quad);
+        self.quadtree.build(&mut self.bodies);
 
-        for body in &self.bodies {
-            self.quadtree.insert(body.pos, body.mass);
-        }
-
-        self.quadtree.propagate();
-
-        for body in &mut self.bodies {
-            body.acc = self.quadtree.acc(body.pos);
+        for body in 0..self.bodies.len() {
+            self.bodies[body].acc = self.quadtree.acc(self.bodies[body].pos, &self.bodies);
         }
     }
 
