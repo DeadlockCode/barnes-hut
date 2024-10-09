@@ -14,18 +14,21 @@ fn main() {
     let config = quarkstrom::Config {
         window_mode: quarkstrom::WindowMode::Windowed(900, 900),
     };
-    quarkstrom::run::<Renderer>(config);
 
     let mut simulation = Simulation::new();
 
-    loop {
-        if renderer::PAUSED.load(Ordering::Relaxed) {
-            std::thread::yield_now();
-        } else {
-            simulation.step();
-        }
-        render(&mut simulation);
-    }
+    std::thread::spawn(move || {
+	    loop {
+	        if renderer::PAUSED.load(Ordering::Relaxed) {
+	            std::thread::yield_now();
+	        } else {
+	            simulation.step();
+	        }
+	        render(&mut simulation);
+	    }
+    });
+
+    quarkstrom::run::<Renderer>(config);
 }
 
 fn render(simulation: &mut Simulation) {
