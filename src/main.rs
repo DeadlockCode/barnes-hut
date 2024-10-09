@@ -11,7 +11,7 @@ use simulation::Simulation;
 
 fn main() {
     let config = quarkstrom::Config {
-        window_mode: quarkstrom::WindowMode::Windowed(900, 900),
+        window_mode: quarkstrom::WindowMode::Fullscreen,
     };
     quarkstrom::run::<Renderer>(config);
 
