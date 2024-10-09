@@ -1545,7 +1545,7 @@ checksum = "332cd62e95873ea4f41f3dfd6bbbfc5b52aec892d7e8d534197c4720a0bbbab2"
 [[package]]
 name = "quarkstrom"
 version = "0.1.0"
-source = "git+https://github.com/DeadlockCode/quarkstrom?rev=4ae91d0#4ae91d08599472d949b33cc5bf689c38319ae131"
+source = "git+https://github.com/DeadlockCode/quarkstrom?rev=18d854cf7549683f2fc7a8455f41f7592e4d3467#18d854cf7549683f2fc7a8455f41f7592e4d3467"
 dependencies = [
  "arc-swap",
  "bytemuck",

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-quarkstrom = { git = "https://github.com/DeadlockCode/quarkstrom", rev = "4ae91d0" }
+quarkstrom = { git = "https://github.com/DeadlockCode/quarkstrom", rev = "18d854cf7549683f2fc7a8455f41f7592e4d3467" }
 
 ultraviolet = "0.9.2"
 fastrand = "2.1.1"
