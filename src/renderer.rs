@@ -1,6 +1,7 @@
 use std::{
     f32::consts::{PI, TAU},
     sync::atomic::{AtomicBool, Ordering},
+    time::Instant,
 };
 
 use crate::{
@@ -43,6 +44,8 @@ pub struct Renderer {
 
     bodies: Vec<Body>,
     quadtree: Vec<Node>,
+
+    start_time: Instant,
 }
 
 impl quarkstrom::Renderer for Renderer {
@@ -66,6 +69,8 @@ impl quarkstrom::Renderer for Renderer {
 
             bodies: Vec::new(),
             quadtree: Vec::new(),
+	    
+	    start_time: Instant::now(),
         }
     }
 
@@ -114,7 +119,7 @@ impl quarkstrom::Renderer for Renderer {
 
         if input.mouse_pressed(1) {
             let mouse = world_mouse();
-            self.spawn_body = Some(Body::new(mouse, Vec2::zero(), 1.0, 1.0));
+            self.spawn_body = Some(Body::new(mouse, Vec2::zero(), 1.0, 1.0,20000.0));
             self.angle = None;
             self.total = Some(0.0);
         } else if input.mouse_held(1) {
@@ -162,10 +167,40 @@ impl quarkstrom::Renderer for Renderer {
         ctx.set_view_pos(self.pos);
         ctx.set_view_scale(self.scale);
 
+
+	let _elapsed = self.start_time.elapsed().as_secs_f32();
+
         if !self.bodies.is_empty() {
             if self.show_bodies {
-                for i in 0..self.bodies.len() {
-                    ctx.draw_circle(self.bodies[i].pos, self.bodies[i].radius, [0xff; 4]);
+		
+                for body in &self.bodies{
+/*
+			let speed = body.vel.mag(); 
+			let red = ((speed * 2.0).sin() * 127.5 + 127.5) as u8;   
+                    	let green = ((speed * 1.0).sin() * 127.5 + 127.5) as u8; 
+                    	let blue = ((speed * 0.5).sin() * 127.5 + 127.5) as u8;  
+                    	let color = [red, green, blue, 0xFF];
+			ctx.draw_circle(body.pos, body.radius, color);*/
+			
+			let speed = body.vel.mag(); 
+    let max_speed = 50.0; 
+
+    let normalized_speed = (speed / max_speed).clamp(0.0, 1.0);
+
+    
+    let red = ((1.0 - normalized_speed) * 255.0) as u8;  
+    let blue = (normalized_speed * 255.0) as u8;         
+    let green = blue % 255 as u8;                                       
+    let color = [red, green, blue, 0xFF];
+
+    
+    ctx.draw_circle(body.pos, body.radius, color);			
+
+			/*if speed < 30.0{
+				ctx.draw_circle(body.pos, body.radius, [0xff, 0,0, 0xFF]);
+			} else{
+				ctx.draw_circle(body.pos, body.radius, color);
+			}*/
                 }
             }
 
@@ -175,11 +210,11 @@ impl quarkstrom::Renderer for Renderer {
             }
 
             if let Some(body) = &self.spawn_body {
-                ctx.draw_circle(body.pos, body.radius, [0xff; 4]);
+                ctx.draw_circle(body.pos, body.radius, [0x00,0x00,0xff,0x0f]);
                 ctx.draw_line(body.pos, body.pos + body.vel, [0xff; 4]);
             }
         }
-
+/*
         if self.show_quadtree && !self.quadtree.is_empty() {
             let mut depth_range = self.depth_range;
             if depth_range.0 >= depth_range.1 {
@@ -240,7 +275,7 @@ impl quarkstrom::Renderer for Renderer {
                     ctx.draw_rect(min, max, color);
                 }
             }
-        }
+        }*/
     }
 
     fn gui(&mut self, ctx: &quarkstrom::egui::Context) {

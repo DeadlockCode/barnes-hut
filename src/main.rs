@@ -18,7 +18,7 @@ fn main() {
         .unwrap();
 
     let config = quarkstrom::Config {
-        window_mode: quarkstrom::WindowMode::Windowed(900, 900),
+        window_mode: quarkstrom::WindowMode::Windowed(1900, 900),
     };
 
     let mut simulation = Simulation::new();

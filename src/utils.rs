@@ -8,21 +8,24 @@ pub fn uniform_disc(n: usize) -> Vec<Body> {
 
     let mut bodies: Vec<Body> = Vec::with_capacity(n);
 
-    let m = 1e6;
-    let center = Body::new(Vec2::zero(), Vec2::zero(), m as f32, inner_radius);
+    let m = 1e4;
+    let center = Body::new(Vec2::zero(), Vec2::zero(), m as f32, 100.0,20000.0);
+    let other = Body::new(Vec2::new(0.0,13000.0), Vec2::zero(), m as f32, 100.0,20000.0);
+
     bodies.push(center);
+    bodies.push(other);
 
     while bodies.len() < n {
         let a = fastrand::f32() * std::f32::consts::TAU;
         let (sin, cos) = a.sin_cos();
         let t = inner_radius / outer_radius;
         let r = fastrand::f32() * (1.0 - t * t) + t * t;
-        let pos = Vec2::new(cos, sin) * outer_radius * r.sqrt();
+        let pos = Vec2::new(cos*5.0, sin*3.0) * outer_radius * r.sqrt();
         let vel = Vec2::new(sin, -cos);
-        let mass = 1.0f32;
-        let radius = mass.cbrt();
+        let mass = 3.0f32;
+        let radius = mass.sqrt();
 
-        bodies.push(Body::new(pos, vel, mass, radius));
+        bodies.push(Body::new(pos, vel, mass, radius,20000.0));
     }
 
     bodies.sort_by(|a, b| a.pos.mag_sq().total_cmp(&b.pos.mag_sq()));

@@ -13,8 +13,8 @@ pub struct Simulation {
 
 impl Simulation {
     pub fn new() -> Self {
-        let dt = 0.05;
-        let n = 100000;
+        let dt = 2.0;
+        let n = 300000;
         let theta = 1.0;
         let epsilon = 1.0;
         let leaf_capacity = 16;
